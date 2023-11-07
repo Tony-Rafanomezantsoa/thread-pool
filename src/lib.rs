@@ -2,10 +2,10 @@ mod error;
 
 use std::{
     sync::{
-        mpsc::{self, Sender, Receiver},
+        mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
-    thread::{JoinHandle, self},
+    thread::{self, JoinHandle},
 };
 
 use error::ThreadPoolCreationError;
@@ -18,18 +18,16 @@ struct Worker {
 
 impl Worker {
     fn new(receiver: Arc<Mutex<Receiver<Job>>>) -> Self {
-        let thread = thread::spawn(move || {
-            loop {
-                let job = receiver.lock().unwrap().recv().unwrap();
-                job();
-            }
+        let thread = thread::spawn(move || loop {
+            let job = receiver.lock().unwrap().recv().unwrap();
+            job();
         });
 
         Self { thread }
     }
 }
 
-/// `ThreadPool` is a type for executing tasks
+/// `ThreadPool` is a type for executing task
 /// concurrently.
 pub struct ThreadPool {
     sender: Sender<Job>,
@@ -56,5 +54,15 @@ impl ThreadPool {
         }
 
         Ok(Self { sender, workers })
+    }
+
+    /// Push an action into the queue
+    /// for execution.
+    pub fn push<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+        self.sender.send(job).unwrap();
     }
 }
