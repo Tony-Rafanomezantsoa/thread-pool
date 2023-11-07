@@ -1,68 +1,76 @@
-mod error;
+use std::{error::Error, sync::{mpsc, Arc, Mutex}, thread};
 
-use std::{
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
-    },
-    thread::{self, JoinHandle},
-};
+type Task = Box<dyn FnOnce() + Send + 'static>;
 
-use error::ThreadPoolCreationError;
-
-type Job = Box<dyn FnOnce() + Send + 'static>;
-
-struct Worker {
-    thread: JoinHandle<()>,
-}
-
-impl Worker {
-    fn new(receiver: Arc<Mutex<Receiver<Job>>>) -> Self {
-        let thread = thread::spawn(move || loop {
-            let job = receiver.lock().unwrap().recv().unwrap();
-            job();
-        });
-
-        Self { thread }
-    }
-}
-
-/// `ThreadPool` is a type for executing task
-/// concurrently.
+/// `ThreadPool` is a type for
+/// running multiple task in parallel.
 pub struct ThreadPool {
-    sender: Sender<Job>,
-    workers: Vec<Worker>,
+    threads: usize,
+    tasks: Vec<Task>,
 }
 
 impl ThreadPool {
-    /// Create a new `ThreadPool` instance with `n` threads.
-    ///
+    /// Create a new `ThreadPool` instance with `n` thread.
+    /// 
     /// # Error
-    ///
-    /// Returns [`Err`] if `n` is zero.
-    pub fn create(n: usize) -> Result<Self, ThreadPoolCreationError> {
+    /// 
+    /// Returns [Err] if `n` is zero.
+    pub fn create(n: usize) -> Result<Self, Box<dyn Error>> {
         if n == 0 {
-            return Err(ThreadPoolCreationError);
+            return Err(From::from("Invalid number of thread"));
         }
 
-        let mut workers = Vec::with_capacity(n);
-        let (sender, receiver) = mpsc::channel();
-        let receiver = Arc::new(Mutex::new(receiver));
-
-        for _ in 0..n {
-            workers.push(Worker::new(Arc::clone(&receiver)));
-        }
-
-        Ok(Self { sender, workers })
+        Ok(Self { threads: n, tasks: Vec::new() })
     }
 
-    /// Push an action into the queue
-    /// for execution.
-    pub fn push<F>(&self, f: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        let job = Box::new(f);
-        self.sender.send(job).unwrap();
+    /// Add a new task to execute.
+    pub fn new_task<F>(&mut self, f: F) where F: FnOnce() + Send + 'static {
+        self.tasks.push(Box::new(f));
+    }
+
+    /// Execute and wait for all tasks to finish, according to the
+    /// number of thread in the `ThreadPool`.
+    pub fn execute(self) {
+        let (sender, receiver) = mpsc::channel();
+
+        for task in self.tasks {
+            sender.send(task).unwrap();
+        }
+
+        let mut handles = Vec::new();
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        for id in 0..self.threads {
+            let receiver = Arc::clone(&receiver);
+            let handle = thread::spawn(move || {
+                loop {
+                    let receiver = match receiver.lock() {
+                        Ok(r) => r,
+                        _ => {
+                            eprintln!("Failed to execute task in tread `{}`. Thread `{} is down!`", id, id);
+                            break;
+                        }
+                    };
+
+                    let task = match receiver.try_recv() {
+                        Ok(t) => t,
+                        _ => break,
+                    };
+
+                    // Unlock mutex.
+                    drop(receiver);
+
+                    // Running task.
+                    task();
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Ensure that all task is finished.
+        for handle in handles {
+            handle.join().unwrap();
+        }
     }
 }
