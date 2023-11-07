@@ -1,6 +1,5 @@
 use std::{
     error::Error,
-    fmt::format,
     sync::{
         mpsc::{self, Receiver},
         Arc, Mutex,
@@ -86,6 +85,6 @@ impl Worker {
             })
             .unwrap();
 
-        Self { id, handle }
+        Self { handle }
     }
 }
