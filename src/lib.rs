@@ -5,7 +5,7 @@ use std::{
         mpsc::{self, Sender, Receiver},
         Arc, Mutex,
     },
-    thread::JoinHandle,
+    thread::{JoinHandle, self},
 };
 
 use error::ThreadPoolCreationError;
@@ -18,7 +18,14 @@ struct Worker {
 
 impl Worker {
     fn new(receiver: Arc<Mutex<Receiver<Job>>>) -> Self {
-        todo!();
+        let thread = thread::spawn(move || {
+            loop {
+                let job = receiver.lock().unwrap().recv().unwrap();
+                job();
+            }
+        });
+
+        Self { thread }
     }
 }
 
@@ -41,7 +48,7 @@ impl ThreadPool {
         }
 
         let mut workers = Vec::with_capacity(n);
-        let (sender, receiver) = mpsc::channelS();
+        let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
 
         for _ in 0..n {
